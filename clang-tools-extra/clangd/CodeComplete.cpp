@@ -1476,6 +1476,9 @@ bool allowIndex(CodeCompletionContext &CC) {
   case NestedNameSpecifier::TypeSpec:
   // Unresolved inside a template.
   case NestedNameSpecifier::Identifier:
+  // P2996 reflection splices — resolved at constant-evaluation time.
+  case NestedNameSpecifier::Splice:
+  case NestedNameSpecifier::SpliceWithTemplate:
     return false;
   }
   llvm_unreachable("invalid NestedNameSpecifier kind");

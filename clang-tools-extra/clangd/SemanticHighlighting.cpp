@@ -1127,6 +1127,19 @@ public:
     return RecursiveASTVisitor::TraverseTemplateArgumentLoc(L);
   }
 
+  // P2996: highlight the ^ reflection operator.
+  bool VisitCXXReflectExpr(CXXReflectExpr *E) {
+    H.addToken(E->getOperatorLoc(), HighlightingKind::Operator);
+    return true;
+  }
+
+  // P2996: highlight the [: :] splice brackets as operators.
+  bool VisitCXXSpliceExpr(CXXSpliceExpr *E) {
+    H.addToken(E->getBeginLoc(), HighlightingKind::Operator);
+    H.addToken(E->getEndLoc(), HighlightingKind::Operator);
+    return true;
+  }
+
   // findExplicitReferences will walk nested-name-specifiers and
   // find anything that can be resolved to a Decl. However, non-leaf
   // components of nested-name-specifiers which are dependent names

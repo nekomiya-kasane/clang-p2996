@@ -8,6 +8,7 @@
 
 #include "FindTarget.h"
 #include "AST.h"
+#include "ReflectionSupport.h"
 #include "support/Logger.h"
 #include "clang/AST/ASTConcept.h"
 #include "clang/AST/ASTTypeTraits.h"
@@ -352,6 +353,16 @@ public:
       VisitCXXRewrittenBinaryOperator(const CXXRewrittenBinaryOperator *RBO) {
         Outer.add(RBO->getDecomposedForm().InnerBinOp, Flags);
       }
+      // P2996: ^Entity — resolve the reflected entity.
+      void VisitCXXReflectExpr(const CXXReflectExpr *E) {
+        if (auto D = getReflectedDecl(E))
+          Outer.add(*D, Flags);
+      }
+      // P2996: [:R:] — resolve via the model expression.
+      void VisitCXXSpliceExpr(const CXXSpliceExpr *E) {
+        if (auto D = getSplicedDecl(E))
+          Outer.add(*D, Flags);
+      }
     };
     Visitor(*this, Flags).Visit(S);
   }
@@ -507,6 +518,11 @@ public:
       return;
     case NestedNameSpecifier::Super:
       add(NNS->getAsRecordDecl(), Flags);
+      return;
+    case NestedNameSpecifier::Splice:
+    case NestedNameSpecifier::SpliceWithTemplate:
+      // P2996 reflection splice specifiers ([:R:]::).
+      // TODO: resolve splice target for go-to-definition (Phase 1).
       return;
     }
     llvm_unreachable("unhandled NestedNameSpecifier::SpecifierKind");
@@ -848,6 +864,24 @@ llvm::SmallVector<ReferenceLoc> refInStmt(const Stmt *S,
                                   LS->getIdentLoc(),
                                   /*IsDecl=*/true,
                                   {LS->getDecl()}});
+    }
+
+    // P2996: ^Entity — produce reference to reflected entity.
+    void VisitCXXReflectExpr(const CXXReflectExpr *E) {
+      if (auto D = getReflectedDecl(E))
+        Refs.push_back(ReferenceLoc{NestedNameSpecifierLoc(),
+                                    E->getOperatorLoc(),
+                                    /*IsDecl=*/false,
+                                    {*D}});
+    }
+
+    // P2996: [:R:] — produce reference to spliced entity.
+    void VisitCXXSpliceExpr(const CXXSpliceExpr *E) {
+      if (auto D = getSplicedDecl(E))
+        Refs.push_back(ReferenceLoc{NestedNameSpecifierLoc(),
+                                    E->getBeginLoc(),
+                                    /*IsDecl=*/false,
+                                    {*D}});
     }
   };
 

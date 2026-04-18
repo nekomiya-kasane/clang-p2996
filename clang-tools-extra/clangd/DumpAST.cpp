@@ -159,6 +159,8 @@ class DumpVisitor : public RecursiveASTVisitor<DumpVisitor> {
       NNS_KIND(Global);
       NNS_KIND(Super);
       NNS_KIND(NamespaceAlias);
+      NNS_KIND(Splice);
+      NNS_KIND(SpliceWithTemplate);
 #undef NNS_KIND
     }
     llvm_unreachable("Unhandled SpecifierKind enum");
@@ -283,6 +285,10 @@ class DumpVisitor : public RecursiveASTVisitor<DumpVisitor> {
       return NNS.getAsNamespace()->getNameAsString() + "::";
     case NestedNameSpecifier::NamespaceAlias:
       return NNS.getAsNamespaceAlias()->getNameAsString() + "::";
+    case NestedNameSpecifier::Splice:
+      return "[:...:]::";
+    case NestedNameSpecifier::SpliceWithTemplate:
+      return "template [:...:]::";
     default:
       return "";
     }

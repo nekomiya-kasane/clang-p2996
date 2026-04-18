@@ -100,6 +100,7 @@ add_clang_library(clangDaemon STATIC
   PathMapping.cpp
   Protocol.cpp
   Quality.cpp
+  ReflectionSupport.cpp
   ParsedAST.cpp
   Preamble.cpp
   RIFF.cpp
