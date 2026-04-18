@@ -752,6 +752,15 @@ public:
 
   // FIXME: Handle RecoveryExpr to try to hint some invalid calls.
 
+  // P2996: show resolved type hint for splice expressions [:R:]
+  bool VisitCXXSpliceExpr(CXXSpliceExpr *E) {
+    if (!Cfg.InlayHints.DeducedTypes || E->getType().isNull() ||
+        E->getType()->isDependentType())
+      return true;
+    addTypeHint(E->getSourceRange(), E->getType(), /*Prefix=*/": ");
+    return true;
+  }
+
 private:
   using NameVec = SmallVector<StringRef, 8>;
 

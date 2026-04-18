@@ -1372,6 +1372,14 @@ std::optional<HoverInfo> getHover(ParsedAST &AST, Position Pos,
           HI->Value = printExprValue(N, AST.getASTContext()).PrintedValue;
         maybeAddCalleeArgInfo(N, *HI, PP);
 
+        // P2996: annotate hover with reflection/splice context.
+        if (const Expr *E = N->ASTNode.get<Expr>()) {
+          if (isa<CXXReflectExpr>(E))
+            HI->Documentation = "*(reflection)*\n\n" + HI->Documentation;
+          else if (isa<CXXSpliceExpr>(E))
+            HI->Documentation = "*(splice)*\n\n" + HI->Documentation;
+        }
+
         if (!isa<NamespaceDecl>(DeclToUse))
           maybeAddSymbolProviders(AST, *HI,
                                   include_cleaner::Symbol{*DeclToUse});
