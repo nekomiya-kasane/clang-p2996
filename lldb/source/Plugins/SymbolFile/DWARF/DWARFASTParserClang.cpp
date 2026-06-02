@@ -1606,7 +1606,7 @@ void DWARFASTParserClang::ParseInheritance(
   std::unique_ptr<clang::CXXBaseSpecifier> result =
       ast->CreateBaseClassSpecifier(base_class_clang_type.GetOpaqueQualType(),
                                     accessibility, is_virtual,
-                                    is_base_of_class);
+                                    class_clang_type.GetOpaqueQualType());
   if (!result)
     return;
 

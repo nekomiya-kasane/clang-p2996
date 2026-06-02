@@ -1011,7 +1011,7 @@ public:
   std::unique_ptr<clang::CXXBaseSpecifier>
   CreateBaseClassSpecifier(lldb::opaque_compiler_type_t type,
                            lldb::AccessType access, bool is_virtual,
-                           bool base_of_class);
+                           lldb::opaque_compiler_type_t derived_type);
 
   bool TransferBaseClasses(
       lldb::opaque_compiler_type_t type,

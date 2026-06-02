@@ -1388,7 +1388,7 @@ void PDBASTParser::AddRecordBases(
     std::unique_ptr<clang::CXXBaseSpecifier> base_spec =
         m_ast.CreateBaseClassSpecifier(
             base_comp_type.GetOpaqueQualType(), access, is_virtual,
-            record_kind == llvm::to_underlying(clang::TagTypeKind::Class));
+            record_type.GetOpaqueQualType());
     lldbassert(base_spec);
 
     base_classes.push_back(std::move(base_spec));

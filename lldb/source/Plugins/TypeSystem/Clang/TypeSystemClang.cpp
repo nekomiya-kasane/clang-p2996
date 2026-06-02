@@ -7855,18 +7855,16 @@ void TypeSystemClang::AddMethodOverridesForCXXRecordType(
 std::unique_ptr<clang::CXXBaseSpecifier>
 TypeSystemClang::CreateBaseClassSpecifier(lldb::opaque_compiler_type_t type,
                                           AccessType access, bool is_virtual,
-                                          bool base_of_class) {
+                                          lldb::opaque_compiler_type_t derived_type) {
   if (!type)
     return nullptr;
 
-  // p2996 fork removed BaseOfClass ctor param; it is now derived from
-  // CXXRecordDecl::isClass() on the Derived pointer. Pass nullptr here —
-  // CXXRecordDecl::setBases() will set it when the base is attached.
   return std::make_unique<clang::CXXBaseSpecifier>(
       clang::SourceRange(), is_virtual,
       TypeSystemClang::ConvertAccessTypeToAccessSpecifier(access),
       getASTContext().getTrivialTypeSourceInfo(GetQualType(type)),
-      /*Derived=*/nullptr, clang::SourceLocation());
+      GetAsCXXRecordDecl(derived_type),
+      clang::SourceLocation());
 }
 
 bool TypeSystemClang::TransferBaseClasses(
@@ -7881,12 +7879,9 @@ bool TypeSystemClang::TransferBaseClasses(
   raw_bases.reserve(bases.size());
 
   // Clang will make a copy of them, so it's ok that we pass pointers that we're
-  // about to destroy. Set the Derived pointer (p2996 fork uses it in
-  // isBaseOfClass() instead of the removed BaseOfClass bit field).
-  for (auto &b : bases) {
-    b->setDerived(cxx_record_decl);
+  // about to destroy.
+  for (auto &b : bases)
     raw_bases.push_back(b.get());
-  }
   cxx_record_decl->setBases(raw_bases.data(), raw_bases.size());
   return true;
 }
