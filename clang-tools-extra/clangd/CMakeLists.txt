@@ -101,6 +101,7 @@ add_clang_library(clangDaemon STATIC
   Protocol.cpp
   Quality.cpp
   ParsedAST.cpp
+  ReflectionInfo.cpp
   Preamble.cpp
   RIFF.cpp
   ScanningProjectModules.cpp

@@ -18,6 +18,7 @@
 #include "ParsedAST.h"
 #include "Preamble.h"
 #include "Protocol.h"
+#include "ReflectionInfo.h"
 #include "SemanticHighlighting.h"
 #include "SemanticSelection.h"
 #include "SourceCode.h"
@@ -854,6 +855,20 @@ void ClangdServer::findHover(PathRef File, Position Pos,
   };
 
   WorkScheduler->runWithAST("Hover", File, std::move(Action), Transient);
+}
+
+void ClangdServer::reflectionInfo(
+    PathRef File, Position Pos, ReflectionInfoOptions Opts,
+    Callback<std::optional<ReflectionInfoNode>> CB) {
+  auto Action = [Pos, Opts, CB = std::move(CB)](
+                    llvm::Expected<InputsAndAST> InpAST) mutable {
+    if (!InpAST)
+      return CB(InpAST.takeError());
+    CB(clangd::getReflectionInfo(InpAST->AST, Pos, Opts));
+  };
+
+  WorkScheduler->runWithAST("ReflectionInfo", File, std::move(Action),
+                            Transient);
 }
 
 void ClangdServer::typeHierarchy(PathRef File, Position Pos, int Resolve,

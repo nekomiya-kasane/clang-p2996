@@ -1428,6 +1428,7 @@ class Foo final {})cpp";
     EXPECT_EQ(H->TemplateParameters, Expected.TemplateParameters);
     EXPECT_EQ(H->SymRange, Expected.SymRange);
     EXPECT_EQ(H->Value, Expected.Value);
+    EXPECT_EQ(H->Reflection, Expected.Reflection);
     EXPECT_EQ(H->Size, Expected.Size);
     EXPECT_EQ(H->Offset, Expected.Offset);
     EXPECT_EQ(H->Align, Expected.Align);
@@ -1557,6 +1558,315 @@ void fun() {
   }
 }
 
+TEST(Hover, ReflectionInfo) {
+  constexpr llvm::StringLiteral Prefix = R"cpp(
+    namespace std::meta { using info = decltype(^^int); }
+
+    namespace app {
+    struct Widget {
+      int field;
+      static int static_field;
+    };
+    int Widget::static_field = 0;
+    int make_widget(Widget);
+    template <typename T> struct Box {};
+  )cpp";
+  constexpr llvm::StringLiteral Suffix = R"cpp(
+    }
+  )cpp";
+
+  struct Case {
+    llvm::StringLiteral Code;
+    llvm::StringLiteral Name;
+    std::vector<llvm::StringLiteral> ReflectionContains;
+    std::vector<llvm::StringLiteral> ReflectionNotContains;
+  } Cases[] = {
+      {"constexpr std::meta::info [[int^_info]] = ^^int;",
+       "int_info",
+       {"kind: type", "display: int", "type: int"},
+       {"identifier:"}},
+      {"constexpr std::meta::info [[type^_info]] = ^^Widget;",
+       "type_info",
+       {"kind: type", "display: app::Widget", "identifier: Widget",
+        "type: app::Widget"},
+       {}},
+      {"constexpr std::meta::info [[field^_info]] = ^^Widget::field;",
+       "field_info",
+       {"kind: declaration", "display: app::Widget::field", "identifier: field",
+        "type: int", "target: int field"},
+       {}},
+      {"constexpr std::meta::info [[static_field^_info]] = "
+       "^^Widget::static_field;",
+       "static_field_info",
+       {"kind: declaration", "display: app::Widget::static_field",
+        "identifier: static_field", "type: int",
+        "target: static int static_field"},
+       {}},
+      {"constexpr std::meta::info [[function^_info]] = ^^make_widget;",
+       "function_info",
+       {"kind: declaration", "display: app::make_widget",
+        "identifier: make_widget", "type: int (Widget)",
+        "target: int make_widget(Widget)"},
+       {}},
+      {"constexpr std::meta::info [[template^_info]] = ^^Box;",
+       "template_info",
+       {"kind: template", "display: Box", "identifier: Box",
+        "target: template <typename T> struct Box {}"},
+       {"value-type:"}},
+      {"constexpr std::meta::info [[namespace^_info]] = ^^app;",
+       "namespace_info",
+       {"kind: namespace", "display: app", "identifier: app"},
+       {"value-type:"}},
+      {"constexpr std::meta::info direct_info = ^^[[Widg^et]];",
+       "expression",
+       {"kind: type", "display: app::Widget", "identifier: Widget",
+        "type: app::Widget"},
+       {}},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Code);
+    Annotations T((Prefix + C.Code + Suffix).str());
+    TestTU TU = TestTU::withCode(T.code());
+    TU.ExtraArgs.push_back("-std=gnu++26");
+    TU.ExtraArgs.push_back("-freflection-latest");
+    auto AST = TU.build();
+
+    auto H = getHover(AST, T.point(), format::getLLVMStyle(), nullptr);
+    ASSERT_TRUE(H);
+    EXPECT_EQ(H->Name, C.Name);
+    ASSERT_TRUE(H->Reflection);
+    for (llvm::StringRef Expected : C.ReflectionContains)
+      EXPECT_THAT(*H->Reflection, testing::HasSubstr(Expected.str()));
+    for (llvm::StringRef Unexpected : C.ReflectionNotContains)
+      EXPECT_THAT(*H->Reflection,
+                  testing::Not(testing::HasSubstr(Unexpected.str())));
+  }
+}
+
+TEST(Hover, ReflectionInfoFromMetaQueries) {
+  struct Case {
+    llvm::StringLiteral Code;
+    llvm::StringLiteral Name;
+    std::vector<llvm::StringLiteral> ReflectionContains;
+  } Cases[] = {
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        struct Anno { int value; };
+        struct [[= Anno{42}]] Annotated {};
+
+        constexpr std::meta::info [[annotation^_info]] =
+            std::meta::annotations_of(^^Annotated)[0];
+        }
+      )cpp",
+       "annotation_info",
+       {"kind: annotation", "type:", "Anno", "target:"}},
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        struct Base {};
+        struct Derived : public virtual Base {};
+
+        constexpr std::meta::info [[base^_info]] =
+            std::meta::bases_of(^^Derived,
+                                std::meta::access_context::unchecked())[0];
+        }
+      )cpp",
+       "base_info",
+       {"kind: base-specifier", "display: Base", "type: Base",
+        "target: public virtual Base"}},
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        struct Widget { int field; };
+
+        constexpr std::meta::info [[type^_of_info]] =
+            std::meta::type_of(^^Widget::field);
+        }
+      )cpp",
+       "type_of_info",
+       {"kind: type", "display: int", "type: int"}},
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        int make(int value, double scale);
+
+        constexpr std::meta::info [[parameter^_info]] =
+            std::meta::parameters_of(^^make)[0];
+        }
+      )cpp",
+       "parameter_info",
+       {"kind: parameter", "display: value", "identifier: value", "type: int",
+        "target: int value"}},
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        enum class Color { Red = 7, Green };
+
+        constexpr std::meta::info [[enumerator^_info]] =
+            std::meta::enumerators_of(^^Color)[0];
+        }
+      )cpp",
+       "enumerator_info",
+       {"kind: declaration", "display: app::Color::Red", "identifier: Red",
+        "type: app::Color", "target: Red = 7"}},
+      {R"cpp(
+        #include <meta>
+        #include <string>
+
+        namespace app {
+        constexpr std::meta::info [[data^_member_spec_info]] =
+            std::meta::data_member_spec(^^int,
+                                        {.name = "generated", .alignment = 4});
+        }
+      )cpp",
+       "data_member_spec_info",
+       {"kind: data-member-spec", "display: generated", "identifier: generated",
+        "type: int", "alignment: 4"}},
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        constexpr std::meta::info [[value^_info]] =
+            std::meta::reflect_constant(42);
+        }
+      )cpp",
+       "value_info",
+       {"kind: value", "type: int", "target: 42"}},
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        constexpr int constant = 42;
+        constexpr std::meta::info [[object^_info]] =
+            std::meta::reflect_object(constant);
+        }
+      )cpp",
+       "object_info",
+       {"kind: object", "type: const int", "target: &constant"}},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Code);
+    Annotations T(C.Code);
+    TestTU TU = TestTU::withCode(T.code());
+    TU.ExtraArgs.push_back("-std=gnu++26");
+    TU.ExtraArgs.push_back("-freflection-latest");
+    TU.ExtraArgs.push_back("-fannotation-attributes");
+    TU.ExtraArgs.push_back("-fparameter-reflection");
+    auto AST = TU.build();
+
+    auto H = getHover(AST, T.point(), format::getLLVMStyle(), nullptr);
+    ASSERT_TRUE(H);
+    EXPECT_EQ(H->Name, C.Name);
+    ASSERT_TRUE(H->Reflection);
+    for (llvm::StringRef Expected : C.ReflectionContains)
+      EXPECT_THAT(*H->Reflection, testing::HasSubstr(Expected.str()));
+  }
+}
+
+TEST(Hover, ReflectionInfoFromDirectMetaCallHover) {
+  struct Case {
+    llvm::StringLiteral Code;
+    llvm::StringLiteral Name;
+    std::vector<llvm::StringLiteral> ReflectionContains;
+  } Cases[] = {
+      {R"cpp(
+        #include <meta>
+
+        namespace app {
+        struct Widget { int field; };
+
+        constexpr std::meta::info type_of_info =
+            std::meta::[[type^_of]](^^Widget::field);
+        }
+      )cpp",
+       "type_of",
+       {"kind: type", "display: int", "type: int"}},
+      {R"cpp(
+        #include <meta>
+        #include <string>
+
+        namespace app {
+        constexpr std::meta::info data_member_spec_info =
+            std::meta::[[data^_member_spec]](
+                ^^int, {.name = "generated", .alignment = 4});
+        }
+      )cpp",
+       "data_member_spec",
+       {"kind: data-member-spec", "display: generated", "identifier: generated",
+        "type: int", "alignment: 4"}},
+  };
+
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Code);
+    Annotations T(C.Code);
+    TestTU TU = TestTU::withCode(T.code());
+    TU.ExtraArgs.push_back("-std=gnu++26");
+    TU.ExtraArgs.push_back("-freflection-latest");
+    auto AST = TU.build();
+
+    auto H = getHover(AST, T.point(), format::getLLVMStyle(), nullptr);
+    ASSERT_TRUE(H);
+    EXPECT_EQ(H->Name, C.Name);
+    ASSERT_TRUE(H->Reflection);
+    for (llvm::StringRef Expected : C.ReflectionContains)
+      EXPECT_THAT(*H->Reflection, testing::HasSubstr(Expected.str()));
+  }
+}
+
+TEST(Hover, ReflectionInfoDoesNotEvaluateDependentValues) {
+  Annotations T(R"cpp(
+    namespace std::meta { using info = decltype(^^int); }
+
+    template <typename T>
+    void dependent_context() {
+      constexpr std::meta::info [[dep^]] = ^^T;
+    }
+  )cpp");
+  TestTU TU = TestTU::withCode(T.code());
+  TU.ExtraArgs.push_back("-std=gnu++26");
+  TU.ExtraArgs.push_back("-freflection-latest");
+  auto AST = TU.build();
+
+  auto H = getHover(AST, T.point(), format::getLLVMStyle(), nullptr);
+  ASSERT_TRUE(H);
+  EXPECT_EQ(H->Name, "dep");
+  EXPECT_FALSE(H->Reflection);
+}
+
+TEST(Hover, ReflectionInfoFromSingleElementExpansionStatement) {
+  Annotations T(R"cpp(
+    namespace std::meta { using info = decltype(^^int); }
+
+    consteval int expansion_context() {
+      int count = 0;
+      template for (constexpr auto [[elem^]] : {^^int}) {
+        constexpr std::meta::info local = elem;
+        ++count;
+      }
+      return count;
+    }
+    static_assert(expansion_context() == 1);
+  )cpp");
+  TestTU TU = TestTU::withCode(T.code());
+  TU.ExtraArgs.push_back("-std=gnu++26");
+  TU.ExtraArgs.push_back("-freflection-latest");
+  auto AST = TU.build();
+
+  auto H = getHover(AST, T.point(), format::getLLVMStyle(), nullptr);
+  ASSERT_TRUE(H);
+  EXPECT_EQ(H->Name, "elem");
+  ASSERT_TRUE(H->Reflection);
+  EXPECT_THAT(*H->Reflection, testing::HasSubstr("kind: type"));
+  EXPECT_THAT(*H->Reflection, testing::HasSubstr("display: int"));
+}
 TEST(Hover, NoHover) {
   llvm::StringRef Tests[] = {
       "^int main() {}",
@@ -3138,6 +3448,7 @@ TEST(Hover, All) {
     EXPECT_EQ(H->TemplateParameters, Expected.TemplateParameters);
     EXPECT_EQ(H->SymRange, Expected.SymRange);
     EXPECT_EQ(H->Value, Expected.Value);
+    EXPECT_EQ(H->Reflection, Expected.Reflection);
   }
 }
 
@@ -3145,58 +3456,59 @@ TEST(Hover, Providers) {
   struct {
     const char *Code;
     const std::function<void(HoverInfo &)> ExpectedBuilder;
-  } Cases[] = {{R"cpp(
+  } Cases[] = {
+      {R"cpp(
                   struct Foo {};
                   Foo F = Fo^o{};
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = ""; }},
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = ""; }},
+      {R"cpp(
                   #include "foo.h"
                   Foo F = Fo^o{};
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
+      {R"cpp(
                   #include "all.h"
                   Foo F = Fo^o{};
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
+      {R"cpp(
                   #define FOO 5
                   int F = ^FOO;
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = ""; }},
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = ""; }},
+      {R"cpp(
                   #include "foo.h"
                   int F = ^FOO;
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
+      {R"cpp(
                   #include "all.h"
                   int F = ^FOO;
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
+      {R"cpp(
                   #include "foo.h"
                   Foo A;
                   Foo B;
                   Foo C = A ^+ B;
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
-               // Hover selects the underlying decl of the using decl
-               {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
+      // Hover selects the underlying decl of the using decl
+      {R"cpp(
                   #include "foo.h"
                   namespace ns {
                     using ::Foo;
                   }
                   ns::F^oo d;
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
-                {R"cpp(
+       [](HoverInfo &HI) { HI.Provider = "\"foo.h\""; }},
+      {R"cpp(
                   namespace foo {};
                   using namespace fo^o;
                 )cpp",
-                [](HoverInfo &HI) { HI.Provider = ""; }},
-                };
+       [](HoverInfo &HI) { HI.Provider = ""; }},
+  };
 
   for (const auto &Case : Cases) {
     Annotations Code{Case.Code};

@@ -18,6 +18,7 @@
 #include "Hover.h"
 #include "ModulesBuilder.h"
 #include "Protocol.h"
+#include "ReflectionInfo.h"
 #include "SemanticHighlighting.h"
 #include "TUScheduler.h"
 #include "XRefs.h"
@@ -272,6 +273,10 @@ public:
   /// Get code hover for a given position.
   void findHover(PathRef File, Position Pos,
                  Callback<std::optional<HoverInfo>> CB);
+
+  /// Get structured information about a C++ reflection value at a position.
+  void reflectionInfo(PathRef File, Position Pos, ReflectionInfoOptions Opts,
+                      Callback<std::optional<ReflectionInfoNode>> CB);
 
   /// Get information about type hierarchy for a given position.
   void typeHierarchy(PathRef File, Position Pos, int Resolve,

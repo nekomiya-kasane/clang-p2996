@@ -39,6 +39,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -278,6 +279,120 @@ TEST_F(LSPTest, ClangTidyCrash_Issue109367) {
   Client.didOpen("a.cpp", "");
   Client.didOpen("b.cpp", "");
   Client.sync();
+}
+
+TEST_F(LSPTest, ReflectionInfo) {
+  auto CfgProvider =
+      config::Provider::fromAncestorRelativeYAMLFiles(".clangd", FS);
+  Opts.ConfigProvider = CfgProvider.get();
+  FS.Files[".clangd"] = R"yaml(
+CompileFlags:
+  Add: [-std=gnu++26, -freflection-latest, -fannotation-attributes]
+)yaml";
+
+  Annotations Code(R"cpp(
+    namespace std::meta { using info = decltype(^^int); }
+
+    namespace app {
+    struct [[= 42]] Base {};
+    template <typename T, int N> struct Box {};
+    struct [[= 7]] Widget : Base {
+      int first;
+      int second : 3;
+      double third;
+    };
+
+    constexpr std::meta::info [[type^_info]] = ^^Widget;
+    constexpr std::meta::info [[box^_info]] = ^^Box<int, 3>;
+    constexpr int non_reflection = [[^42]];
+    }
+  )cpp");
+
+  auto &Client = start();
+  Client.didOpen("foo.cpp", Code.code());
+  auto Result = Client.call("textDocument/reflectionInfo",
+                            llvm::json::Object{
+                                {"textDocument", Client.documentID("foo.cpp")},
+                                {"position", Code.point("type")},
+                                {"maxDepth", 2},
+                                {"maxChildren", 8},
+                            })
+                    .takeValue();
+  const auto *Object = Result.getAsObject();
+  ASSERT_NE(Object, nullptr);
+  EXPECT_EQ(Object->getString("kind"), "type");
+  EXPECT_EQ(Object->getString("identifier"), "Widget");
+  EXPECT_THAT(Object->getString("display").value_or(""),
+              testing::HasSubstr("Widget"));
+  ASSERT_TRUE(Object->getObject("layout"));
+  EXPECT_TRUE(Object->getObject("layout")->getInteger("sizeBits"));
+  EXPECT_TRUE(Object->getObject("sourceLocation"));
+
+  const auto *Children = Object->getArray("children");
+  ASSERT_NE(Children, nullptr);
+  auto HasChild = [&](llvm::StringRef Role, llvm::StringRef Display) {
+    for (const llvm::json::Value &ChildValue : *Children) {
+      const auto *Child = ChildValue.getAsObject();
+      if (!Child)
+        continue;
+      if (Child->getString("role") == Role &&
+          Child->getString("display").value_or("").contains(Display))
+        return true;
+    }
+    return false;
+  };
+  EXPECT_TRUE(HasChild("annotation", "7"));
+  EXPECT_TRUE(HasChild("base", "Base"));
+  EXPECT_TRUE(HasChild("member", "first"));
+  EXPECT_TRUE(HasChild("member", "second"));
+
+  auto Truncated = Client.call("textDocument/reflectionInfo",
+                               llvm::json::Object{
+                                   {"textDocument",
+                                    Client.documentID("foo.cpp")},
+                                   {"position", Code.point("type")},
+                                   {"maxDepth", 2},
+                                   {"maxChildren", 1},
+                               })
+                       .takeValue();
+  const auto *TruncatedObject = Truncated.getAsObject();
+  ASSERT_NE(TruncatedObject, nullptr);
+  EXPECT_TRUE(TruncatedObject->getBoolean("truncated").value_or(false));
+  ASSERT_TRUE(TruncatedObject->getArray("children"));
+  EXPECT_EQ(TruncatedObject->getArray("children")->size(), 1u);
+
+  auto TemplateResult = Client.call("textDocument/reflectionInfo",
+                                    llvm::json::Object{
+                                        {"textDocument",
+                                         Client.documentID("foo.cpp")},
+                                        {"position", Code.point("box")},
+                                        {"maxDepth", 2},
+                                        {"maxChildren", 8},
+                                    })
+                            .takeValue();
+  const auto *TemplateObject = TemplateResult.getAsObject();
+  ASSERT_NE(TemplateObject, nullptr);
+  EXPECT_EQ(TemplateObject->getString("kind"), "type");
+  const auto *TemplateChildren = TemplateObject->getArray("children");
+  ASSERT_NE(TemplateChildren, nullptr);
+  unsigned TemplateArgumentCount = 0;
+  for (const llvm::json::Value &ChildValue : *TemplateChildren) {
+    const auto *Child = ChildValue.getAsObject();
+    if (Child && Child->getString("role") == "template-argument")
+      ++TemplateArgumentCount;
+  }
+  EXPECT_EQ(TemplateArgumentCount, 2u);
+
+  auto NullResult = Client.call("textDocument/reflectionInfo",
+                                llvm::json::Object{
+                                    {"textDocument",
+                                     Client.documentID("foo.cpp")},
+                                    {"position", Code.point()},
+                                })
+                        .takeValue();
+  EXPECT_TRUE(NullResult.getAsNull());
+
+  Client.didClose("foo.cpp");
 }
 
 TEST_F(LSPTest, IncomingCalls) {

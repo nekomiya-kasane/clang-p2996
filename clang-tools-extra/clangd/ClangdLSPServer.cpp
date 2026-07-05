@@ -16,6 +16,7 @@
 #include "LSPBinder.h"
 #include "ModulesBuilder.h"
 #include "Protocol.h"
+#include "ReflectionInfo.h"
 #include "SemanticHighlighting.h"
 #include "SourceCode.h"
 #include "TUScheduler.h"
@@ -38,6 +39,7 @@
 #include "llvm/Support/SHA1.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -633,6 +635,7 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
            {"resolveProvider", false},
        }},
       {"hoverProvider", true},
+      {"reflectionInfoProvider", true}, // clangd extension
       {"selectionRangeProvider", true},
       {"documentSymbolProvider", true},
       {"workspaceSymbolProvider", true},
@@ -1265,6 +1268,19 @@ void ClangdLSPServer::onDocumentHighlight(
                                  Params.position, std::move(Reply));
 }
 
+void ClangdLSPServer::onReflectionInfo(
+    const ReflectionInfoParams &Params,
+    Callback<std::optional<ReflectionInfoNode>> Reply) {
+  ReflectionInfoOptions Opts;
+  if (Params.MaxDepth)
+    Opts.MaxDepth = static_cast<unsigned>(std::max(0, *Params.MaxDepth));
+  if (Params.MaxChildren)
+    Opts.MaxChildren = static_cast<unsigned>(std::max(0, *Params.MaxChildren));
+  Opts.Include = Params.Include;
+  Server->reflectionInfo(Params.textDocument.uri.file(), Params.position, Opts,
+                         std::move(Reply));
+}
+
 void ClangdLSPServer::onHover(const TextDocumentPositionParams &Params,
                               Callback<std::optional<Hover>> Reply) {
   Server->findHover(Params.textDocument.uri.file(), Params.position,
@@ -1698,6 +1714,7 @@ void ClangdLSPServer::bindMethods(LSPBinder &Bind,
   Bind.method("textDocument/prepareRename", this, &ClangdLSPServer::onPrepareRename);
   Bind.method("textDocument/rename", this, &ClangdLSPServer::onRename);
   Bind.method("textDocument/hover", this, &ClangdLSPServer::onHover);
+  Bind.method("textDocument/reflectionInfo", this, &ClangdLSPServer::onReflectionInfo);
   Bind.method("textDocument/documentSymbol", this, &ClangdLSPServer::onDocumentSymbol);
   Bind.method("workspace/executeCommand", this, &ClangdLSPServer::onCommand);
   Bind.method("textDocument/documentHighlight", this, &ClangdLSPServer::onDocumentHighlight);

@@ -15,6 +15,7 @@
 #include "Headers.h"
 #include "IncludeCleaner.h"
 #include "ParsedAST.h"
+#include "ReflectionInfo.h"
 #include "Selection.h"
 #include "SourceCode.h"
 #include "clang-include-cleaner/Analysis.h"
@@ -55,11 +56,13 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace clang {
@@ -208,6 +211,48 @@ HoverInfo::PrintedType printType(const NonTypeTemplateParmDecl *NTTP,
   return PrintedType;
 }
 
+const Expr *ignoreReflectionValueNoise(const Expr *E) {
+  if (!E)
+    return nullptr;
+  while (true) {
+    E = E->IgnoreImplicit();
+    if (const auto *Cleanups = dyn_cast<ExprWithCleanups>(E)) {
+      E = Cleanups->getSubExpr();
+      continue;
+    }
+    if (const auto *Materialized = dyn_cast<MaterializeTemporaryExpr>(E)) {
+      E = Materialized->getSubExpr();
+      continue;
+    }
+    if (const auto *Bound = dyn_cast<CXXBindTemporaryExpr>(E)) {
+      E = Bound->getSubExpr();
+      continue;
+    }
+    return E;
+  }
+}
+
+const Expr *singleExpansionElementExpr(const Expr *E, unsigned Depth = 0) {
+  if (!E || Depth > 4)
+    return nullptr;
+  E = ignoreReflectionValueNoise(E);
+
+  if (const auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+    const auto *VD = dyn_cast<VarDecl>(DRE->getDecl());
+    if (VD && isa<ExpansionStmtDecl>(VD->getDeclContext()))
+      return singleExpansionElementExpr(VD->getInit(), Depth + 1);
+  }
+
+  if (const auto *Select = dyn_cast<CXXExpansionInitListSelectExpr>(E)) {
+    const auto *Range = dyn_cast_or_null<CXXExpansionInitListExpr>(
+        ignoreReflectionValueNoise(Select->getRangeExpr()));
+    if (!Range || Range->getSubExprs().size() != 1)
+      return nullptr;
+    return ignoreReflectionValueNoise(Range->getSubExprs().front());
+  }
+
+  return nullptr;
+}
 HoverInfo::PrintedType printType(const TemplateTemplateParmDecl *TTP,
                                  const PrintingPolicy &PP) {
   HoverInfo::PrintedType Result;
@@ -418,8 +463,13 @@ static llvm::FormattedNumber printHex(const llvm::APSInt &V) {
   return llvm::format_hex(Bits, 0);
 }
 
-std::optional<std::string> printExprValue(const Expr *E,
-                                          const ASTContext &Ctx) {
+struct EvaluatedExprValue {
+  std::optional<std::string> PrintedValue;
+  std::optional<std::string> Reflection;
+};
+
+EvaluatedExprValue evaluateExprValue(const Expr *E, const ASTContext &Ctx,
+                                     const PrintingPolicy &PP) {
   // InitListExpr has two forms, syntactic and semantic. They are the same thing
   // (refer to a same AST node) in most cases.
   // When they are different, RAV returns the syntactic form, and we should feed
@@ -435,15 +485,23 @@ std::optional<std::string> printExprValue(const Expr *E,
   QualType T = E->getType();
   if (T.isNull() || T->isFunctionType() || T->isFunctionPointerType() ||
       T->isFunctionReferenceType() || T->isVoidType())
-    return std::nullopt;
+    return {};
 
   Expr::EvalResult Constant;
+  if (const Expr *SingleExpansionElement = singleExpansionElementExpr(E)) {
+    auto Evaluated = evaluateExprValue(SingleExpansionElement, Ctx, PP);
+    if (Evaluated.Reflection)
+      return Evaluated;
+  }
+
   // Attempt to evaluate. If expr is dependent, evaluation crashes!
-  if (E->isValueDependent() || !E->EvaluateAsRValue(Constant, Ctx) ||
-      // Disable printing for record-types, as they are usually confusing and
-      // might make clang crash while printing the expressions.
-      Constant.Val.isStruct() || Constant.Val.isUnion())
-    return std::nullopt;
+  if (E->isValueDependent() ||
+      !E->EvaluateAsRValue(Constant, Ctx, T->isReflectionType()))
+    return {};
+
+  if (auto Reflection = renderReflectionInfoForHover(Constant.Val, T, Ctx, PP))
+    return {/*PrintedValue=*/std::nullopt,
+            /*Reflection=*/std::move(*Reflection)};
 
   // Show enums symbolically, not numerically like APValue::printPretty().
   if (T->isEnumeralType() && Constant.Val.isInt() &&
@@ -453,23 +511,40 @@ std::optional<std::string> printExprValue(const Expr *E,
     for (const EnumConstantDecl *ECD :
          T->castAs<EnumType>()->getDecl()->enumerators())
       if (ECD->getInitVal() == Val)
-        return llvm::formatv("{0} ({1})", ECD->getNameAsString(),
-                             printHex(Constant.Val.getInt()))
-            .str();
+        return {/*PrintedValue=*/llvm::formatv("{0} ({1})",
+                                               ECD->getNameAsString(),
+                                               printHex(Constant.Val.getInt()))
+                    .str(),
+                /*Reflection=*/std::nullopt};
   }
   // Show hex value of integers if they're at least 10 (or negative!)
   if (T->isIntegralOrEnumerationType() && Constant.Val.isInt() &&
       Constant.Val.getInt().getSignificantBits() <= 64 &&
       Constant.Val.getInt().uge(10))
-    return llvm::formatv("{0} ({1})", Constant.Val.getAsString(Ctx, T),
-                         printHex(Constant.Val.getInt()))
-        .str();
-  return Constant.Val.getAsString(Ctx, T);
+    return {/*PrintedValue=*/llvm::formatv("{0} ({1})",
+                                           Constant.Val.getAsString(Ctx, T),
+                                           printHex(Constant.Val.getInt()))
+                .str(),
+            /*Reflection=*/std::nullopt};
+  // Disable printing for record-types, as they are usually confusing and might
+  // make clang crash while printing the expressions.
+  if (Constant.Val.isStruct() || Constant.Val.isUnion())
+    return {};
+  return {/*PrintedValue=*/Constant.Val.getAsString(Ctx, T),
+          /*Reflection=*/std::nullopt};
+}
+
+std::optional<std::string> printExprValue(const Expr *E,
+                                          const ASTContext &Ctx) {
+  return evaluateExprValue(E, Ctx, getPrintingPolicy(Ctx.getPrintingPolicy()))
+      .PrintedValue;
 }
 
 struct PrintExprResult {
   /// The evaluation result on expression `Expr`.
   std::optional<std::string> PrintedValue;
+  /// The reflected entity behind a constant std::meta::info expression.
+  std::optional<std::string> Reflection;
   /// The Expr object that represents the closest evaluable
   /// expression.
   const clang::Expr *TheExpr;
@@ -483,7 +558,8 @@ struct PrintExprResult {
 // is returned.
 // If evaluation couldn't be done, return the node where the traversal ends.
 PrintExprResult printExprValue(const SelectionTree::Node *N,
-                               const ASTContext &Ctx) {
+                               const ASTContext &Ctx,
+                               const PrintingPolicy &PP) {
   for (; N; N = N->Parent) {
     // Try to evaluate the first evaluatable enclosing expression.
     if (const Expr *E = N->ASTNode.get<Expr>()) {
@@ -491,16 +567,20 @@ PrintExprResult printExprValue(const SelectionTree::Node *N,
       // has nothing to do with our original cursor position.
       if (!E->getType().isNull() && E->getType()->isVoidType())
         break;
-      if (auto Val = printExprValue(E, Ctx))
-        return PrintExprResult{/*PrintedValue=*/std::move(Val), /*Expr=*/E,
-                               /*Node=*/N};
+      auto Evaluated = evaluateExprValue(E, Ctx, PP);
+      if (Evaluated.PrintedValue || Evaluated.Reflection)
+        return PrintExprResult{
+            /*PrintedValue=*/std::move(Evaluated.PrintedValue),
+            /*Reflection=*/std::move(Evaluated.Reflection),
+            /*Expr=*/E, /*Node=*/N};
     } else if (N->ASTNode.get<Decl>() || N->ASTNode.get<Stmt>()) {
       // Refuse to cross certain non-exprs. (TypeLoc are OK as part of Exprs).
       // This tries to ensure we're showing a value related to the cursor.
       break;
     }
   }
-  return PrintExprResult{/*PrintedValue=*/std::nullopt, /*Expr=*/nullptr,
+  return PrintExprResult{/*PrintedValue=*/std::nullopt,
+                         /*Reflection=*/std::nullopt, /*Expr=*/nullptr,
                          /*Node=*/N};
 }
 
@@ -663,8 +743,19 @@ HoverInfo getHoverContents(const NamedDecl *D, const PrintingPolicy &PP,
 
   // Fill in value with evaluated initializer if possible.
   if (const auto *Var = dyn_cast<VarDecl>(D); Var && !Var->isInvalidDecl()) {
-    if (const Expr *Init = Var->getInit())
-      HI.Value = printExprValue(Init, Ctx);
+    if (const Expr *Init = Var->getInit()) {
+      if (!Init->isValueDependent() && !Var->getType().isNull() &&
+          Var->getType()->isReflectionType()) {
+        if (const APValue *EvaluatedValue = Var->evaluateValue())
+          HI.Reflection = renderReflectionInfoForHover(*EvaluatedValue,
+                                                       Var->getType(), Ctx, PP);
+      }
+
+      auto Evaluated = evaluateExprValue(Init, Ctx, PP);
+      HI.Value = std::move(Evaluated.PrintedValue);
+      if (!HI.Reflection)
+        HI.Reflection = std::move(Evaluated.Reflection);
+    }
   } else if (const auto *ECD = dyn_cast<EnumConstantDecl>(D)) {
     // Dependent enums (e.g. nested in template classes) don't have values yet.
     if (!ECD->getType()->isDependentType())
@@ -733,8 +824,9 @@ HoverInfo evaluateMacroExpansion(unsigned int SpellingBeginOffset,
 
   HoverInfo HI;
   // Attempt to evaluate it from Expr first.
-  auto ExprResult = printExprValue(StartNode, Context);
+  auto ExprResult = printExprValue(StartNode, Context, PP);
   HI.Value = std::move(ExprResult.PrintedValue);
+  HI.Reflection = std::move(ExprResult.Reflection);
   if (auto *E = ExprResult.TheExpr)
     HI.Type = printType(E->getType(), Context, PP);
 
@@ -807,6 +899,7 @@ HoverInfo getHoverContents(const DefinedMacro &Macro, const syntax::Token &Tok,
         /*SpellingEndOffset=*/SM.getFileOffset(Tok.endLocation()),
         /*Expanded=*/Expansion->Expanded, AST);
     HI.Value = std::move(Evaluated.Value);
+    HI.Reflection = std::move(Evaluated.Reflection);
     HI.Type = std::move(Evaluated.Type);
   }
   return HI;
@@ -933,10 +1026,12 @@ std::optional<HoverInfo> getHoverContents(const SelectionTree::Node *N,
     HI = getPredefinedExprHoverContents(*PE, AST.getASTContext(), PP);
   // For expressions we currently print the type and the value, iff it is
   // evaluatable.
-  if (auto Val = printExprValue(E, AST.getASTContext())) {
+  auto Evaluated = evaluateExprValue(E, AST.getASTContext(), PP);
+  if (Evaluated.PrintedValue || Evaluated.Reflection) {
     HI.emplace();
     HI->Type = printType(E->getType(), AST.getASTContext(), PP);
-    HI->Value = *Val;
+    HI->Value = std::move(Evaluated.PrintedValue);
+    HI->Reflection = std::move(Evaluated.Reflection);
     HI->Name = std::string(getNameForExpr(E));
   }
 
@@ -1368,8 +1463,11 @@ std::optional<HoverInfo> getHover(ParsedAST &AST, Position Pos,
         if (DeclToUse == N->ASTNode.get<Decl>())
           addLayoutInfo(*DeclToUse, *HI);
         // Look for a close enclosing expression to show the value of.
-        if (!HI->Value)
-          HI->Value = printExprValue(N, AST.getASTContext()).PrintedValue;
+        if (!HI->Value && !HI->Reflection) {
+          auto Evaluated = printExprValue(N, AST.getASTContext(), PP);
+          HI->Value = std::move(Evaluated.PrintedValue);
+          HI->Reflection = std::move(Evaluated.Reflection);
+        }
         maybeAddCalleeArgInfo(N, *HI, PP);
 
         if (!isa<NamespaceDecl>(DeclToUse))
@@ -1483,6 +1581,11 @@ markup::Document HoverInfo::present() const {
     markup::Paragraph &P = Output.addParagraph();
     P.appendText("Value = ");
     P.appendCode(*Value);
+  }
+
+  if (Reflection) {
+    Output.addParagraph().appendText("Reflection");
+    Output.addCodeBlock(*Reflection, "text");
   }
 
   if (Offset)

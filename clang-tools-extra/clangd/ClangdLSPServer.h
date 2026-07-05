@@ -14,6 +14,7 @@
 #include "GlobalCompilationDatabase.h"
 #include "LSPBinder.h"
 #include "Protocol.h"
+#include "ReflectionInfo.h"
 #include "Transport.h"
 #include "support/Context.h"
 #include "support/MemoryTree.h"
@@ -146,6 +147,8 @@ private:
   void onRename(const RenameParams &, Callback<WorkspaceEdit>);
   void onHover(const TextDocumentPositionParams &,
                Callback<std::optional<Hover>>);
+  void onReflectionInfo(const ReflectionInfoParams &,
+                        Callback<std::optional<ReflectionInfoNode>>);
   void onPrepareTypeHierarchy(const TypeHierarchyPrepareParams &,
                               Callback<std::vector<TypeHierarchyItem>>);
   void onSuperTypes(const ResolveTypeHierarchyItemParams &,
