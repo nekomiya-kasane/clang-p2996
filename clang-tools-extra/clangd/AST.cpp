@@ -453,6 +453,49 @@ namespace {
 /// not have the deduced type set. Instead, we have to go to the appropriate
 /// DeclaratorDecl/FunctionDecl and work our back to the AutoType that does have
 /// a deduced type set. The AST should be improved to simplify this scenario.
+QualType deducedExpansionVariableType(ASTContext &Context, const VarDecl &VD) {
+  if (!isa<ExpansionStmtDecl>(VD.getDeclContext()))
+    return {};
+  const Expr *Init = VD.getInit();
+  if (!Init)
+    return {};
+  Init = Init->IgnoreImplicit();
+
+  if (const auto *EIL = dyn_cast<CXXExpansionInitListSelectExpr>(Init)) {
+    const auto *Range = dyn_cast<CXXExpansionInitListExpr>(EIL->getRangeExpr());
+    if (!Range)
+      return {};
+    QualType Common;
+    for (const Expr *Element : Range->getSubExprs()) {
+      if (!Element)
+        return {};
+      QualType ElementType = Element->getType().getNonLValueExprType(Context);
+      if (ElementType.isNull() || ElementType->isDependentType())
+        return {};
+      if (Common.isNull()) {
+        Common = ElementType;
+        continue;
+      }
+      if (!Context.hasSameType(Common, ElementType))
+        return {};
+      Common = Context.getCommonSugaredType(Common, ElementType);
+    }
+    return Common;
+  }
+
+  if (const auto *IES = dyn_cast<CXXIterableExpansionSelectExpr>(Init)) {
+    QualType ElementType =
+        IES->getImplExpr()->getType().getNonLValueExprType(Context);
+    if (!ElementType.isNull() && !ElementType->isDependentType())
+      return ElementType;
+  }
+
+  QualType InitType = Init->getType().getNonLValueExprType(Context);
+  if (InitType.isNull() || InitType->isDependentType())
+    return {};
+  return InitType;
+}
+
 class DeducedTypeVisitor : public RecursiveASTVisitor<DeducedTypeVisitor> {
   SourceLocation SearchedLocation;
 
@@ -476,6 +519,9 @@ public:
 
     if (auto *AT = D->getType()->getContainedAutoType()) {
       DeducedType = AT->desugar();
+      if (DeducedType.isNull() || DeducedType->isUndeducedAutoType())
+        if (const auto *VD = dyn_cast<VarDecl>(D))
+          DeducedType = deducedExpansionVariableType(D->getASTContext(), *VD);
     }
     return true;
   }

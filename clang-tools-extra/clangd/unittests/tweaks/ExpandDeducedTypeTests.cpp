@@ -145,6 +145,63 @@ TEST_F(ExpandDeducedTypeTest, Test) {
   EXPECT_UNAVAILABLE("decl^type([]{}) f;");
 }
 
+TEST_F(ExpandDeducedTypeTest, ExpansionStatementVariables) {
+  ExtraArgs.push_back("-std=gnu++26");
+  ExtraArgs.push_back("-freflection-latest");
+
+  EXPECT_EQ(apply(R"cpp(
+    consteval int sum() {
+      int total = 0;
+      template for (constexpr ^auto i : {1, 2, 3}) {
+        total += i;
+      }
+      return total;
+    }
+  )cpp"),
+            R"cpp(
+    consteval int sum() {
+      int total = 0;
+      template for (constexpr int i : {1, 2, 3}) {
+        total += i;
+      }
+      return total;
+    }
+  )cpp");
+
+  Header = R"cpp(
+    #include <meta>
+
+    enum class Color { Red, Green, Blue };
+  )cpp";
+
+  EXPECT_EQ(apply(R"cpp(
+    template<typename E>
+    consteval int count() {
+      int total = 0;
+      template for (constexpr ^auto e : std::define_static_array(
+                        std::meta::enumerators_of(^^E))) {
+        (void)e;
+        ++total;
+      }
+      return total;
+    }
+    static_assert(count<Color>() == 3);
+  )cpp"),
+            R"cpp(
+    template<typename E>
+    consteval int count() {
+      int total = 0;
+      template for (constexpr std::meta::info e : std::define_static_array(
+                        std::meta::enumerators_of(^^E))) {
+        (void)e;
+        ++total;
+      }
+      return total;
+    }
+    static_assert(count<Color>() == 3);
+  )cpp");
+}
+
 } // namespace
 } // namespace clangd
 } // namespace clang

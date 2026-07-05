@@ -550,9 +550,13 @@ void ASTStmtWriter::VisitCXXExpansionStmt(CXXExpansionStmt *S) {
   Record.AddStmt(S->getSizeExpr());
   Record.AddStmt(S->getBody());
 
-  Record.writeUInt32(S->getNumInstantiations());
-  for (size_t k = 0; k < S->getNumInstantiations(); ++k)
-    Record.AddStmt(S->getInstantiation(k));
+  if (S->hasDependentSize()) {
+    Record.writeUInt32(0);
+  } else {
+    Record.writeUInt32(S->getNumInstantiations());
+    for (size_t k = 0; k < S->getNumInstantiations(); ++k)
+      Record.AddStmt(S->getInstantiation(k));
+  }
 }
 
 void ASTStmtWriter::VisitCXXIndeterminateExpansionStmt(

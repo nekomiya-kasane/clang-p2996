@@ -25223,6 +25223,9 @@ TEST_F(FormatTest, FileAndCode) {
   EXPECT_EQ(
       FormatStyle::LK_Cpp,
       guessLanguage("foo.h", "#define FOO(...) auto bar = [] __VA_ARGS__;"));
+  EXPECT_EQ(FormatStyle::LK_Cpp,
+            guessLanguage("foo.h",
+                          "void f() { g(^^Iface, [] { return; }); }"));
   // Only one of the two preprocessor regions has ObjC-like code.
   EXPECT_EQ(FormatStyle::LK_ObjC,
             guessLanguage("foo.h", "#if A\n"
@@ -26301,6 +26304,22 @@ TEST_F(FormatTest, Concepts) {
       "template <typename T>\n"
       "concept C = []() { return true; }() && requires(T t) { t.bar(); } &&\n"
       "            sizeof(T) <= 8;");
+
+  verifyFormat(
+      "template <typename T>\n"
+      "concept TupleLikeClass = requires {\n"
+      "  typename std::tuple_size<std::remove_cvref_t<T>>::value_type;\n"
+      "} && []<size_t... N>(std::index_sequence<N...>) {\n"
+      "  return requires(T && t) {\n"
+      "    (std::get<N>(t), ...);\n"
+      "  };\n"
+      "}(std::make_index_sequence<std::tuple_size_v<std::remove_cvref_t<T>>>{})"
+      ";",
+      getLLVMStyleWithColumns(120));
+
+  verifyFormat(
+      "using MemberType = typename [:std::meta::type_of(Members<T>[I]):];",
+      getLLVMStyleWithColumns(120));
 
   // FIXME: This is misformatted because the fake l paren starts at bool, not at
   // the lambda l square.
@@ -28159,6 +28178,75 @@ TEST_F(FormatTest, EnumTrailingComma) {
                Style);
 }
 
+TEST_F(FormatTest, ReflectionAnnotations) {
+  FormatStyle Style = getLLVMStyle();
+  EXPECT_EQ(Style.ReflectionAnnotationStyle, FormatStyle::RAS_Spaced);
+
+  verifyFormat("struct [[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] H {\n"
+               "} h;",
+               "struct[[= $::AnnoA{42}]][[= $::AnnoB{\"Hello\"}]] H {} h;",
+               Style);
+  verifyFormat("[[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] void f();",
+               "[[= $::AnnoA{42}]][[= $::AnnoB{\"Hello\"}]] void f();", Style);
+  verifyFormat("[[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] int v;",
+               "[[= $::AnnoA{42}]][[= $::AnnoB{\"Hello\"}]] int v;", Style);
+
+  Style.BreakAfterAttributes = FormatStyle::ABS_Always;
+  verifyFormat("[[= 42, = basic_parsing::fn()]] void annFn();",
+               "[[=42, =basic_parsing::fn()]] void annFn();", Style);
+  Style.BreakAfterAttributes = FormatStyle::ABS_Leave;
+
+  Style.ReflectionAnnotationStyle = FormatStyle::RAS_OwnLine;
+  Style.BreakAfterAttributes = FormatStyle::ABS_Never;
+  verifyFormat("struct\n"
+               "[[= $::AnnoA{42}]]\n"
+               "[[= $::AnnoB{\"Hello\"}]]\n"
+               "H {\n"
+               "} h;",
+               "struct [[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] H {} h;",
+               Style);
+  verifyFormat("[[= $::AnnoA{42}]]\n"
+               "[[= $::AnnoB{\"Hello\"}]]\n"
+               "void f();",
+               "[[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] void f();", Style);
+  verifyFormat("[[= $::AnnoA{42}]]\n"
+               "[[= $::AnnoB{\"Hello\"}]]\n"
+               "int v;",
+               "[[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] int v;", Style);
+  verifyFormat("[[= 42, = basic_parsing::fn()]]\n"
+               "void annFn();",
+               "[[=42, =basic_parsing::fn()]] void annFn();", Style);
+  verifyFormat("template <typename>\n"
+               "struct\n"
+               "[[= 42, = basic_parsing::fn()]]\n"
+               "TCls;",
+               "template <typename> struct[[=42, =basic_parsing::fn()]] TCls;",
+               Style);
+  verifyFormat("namespace\n"
+               "[[= 42, = basic_parsing::fn()]]\n"
+               "NS {}",
+               "namespace[[=42, =basic_parsing::fn()]] NS {}", Style);
+  verifyFormat("void f()\n"
+               "[[= 42]];",
+               "void f() [[=42]];", Style);
+  verifyFormat("int v\n"
+               "[[= 42]];",
+               "int v [[=42]];", Style);
+  verifyFormat("auto l = []()\n"
+               "[[= 42]] {};",
+               "auto l = []() [[=42]] {};", Style);
+
+  Style.ReflectionAnnotationStyle = FormatStyle::RAS_Compact;
+  Style.BreakAfterAttributes = FormatStyle::ABS_Leave;
+  verifyFormat("struct[[= $::AnnoA{42}]][[= $::AnnoB{\"Hello\"}]] H {\n"
+               "} h;",
+               "struct [[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] H {} h;",
+               Style);
+  verifyFormat("[[= $::AnnoA{42}]][[= $::AnnoB{\"Hello\"}]] void f();",
+               "[[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] void f();", Style);
+  verifyFormat("[[= $::AnnoA{42}]][[= $::AnnoB{\"Hello\"}]] int v;",
+               "[[= $::AnnoA{42}]] [[= $::AnnoB{\"Hello\"}]] int v;", Style);
+}
 TEST_F(FormatTest, BreakAfterAttributes) {
   constexpr StringRef Code("[[maybe_unused]] const int i;\n"
                            "[[foo([[]])]] [[maybe_unused]]\n"

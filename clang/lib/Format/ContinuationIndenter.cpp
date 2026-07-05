@@ -44,6 +44,21 @@ static bool shouldUnindentNextOperator(const FormatToken &Tok) {
                       Previous->isOneOf(tok::kw_return, TT_RequiresClause));
 }
 
+static bool isReflectionAnnotationAttributeStart(const FormatToken &Tok) {
+  return Tok.startsSequence(tok::l_square, tok::l_square, tok::equal);
+}
+
+static bool isReflectionAnnotationAttributeEnd(const FormatToken &Tok) {
+  if (Tok.isNot(tok::r_square) || !Tok.Previous ||
+      Tok.Previous->isNot(tok::r_square)) {
+    return false;
+  }
+  for (const FormatToken *T = Tok.Previous; T; T = T->Previous)
+    if (isReflectionAnnotationAttributeStart(*T))
+      return true;
+  return false;
+}
+
 // Returns the length of everything up to the first possible line break after
 // the ), ], } or > matching \c Tok.
 static unsigned getLengthToMatchingParen(const FormatToken &Tok,
@@ -1319,6 +1334,14 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
   const FormatToken *NextNonComment = Previous.getNextNonComment();
   if (!NextNonComment)
     NextNonComment = &Current;
+
+  if (Style.ReflectionAnnotationStyle == FormatStyle::RAS_OwnLine &&
+      ((NextNonComment &&
+        isReflectionAnnotationAttributeStart(*NextNonComment)) ||
+       (PreviousNonComment &&
+        isReflectionAnnotationAttributeEnd(*PreviousNonComment)))) {
+    return CurrentState.Indent;
+  }
 
   // Java specific bits.
   if (Style.isJava() &&

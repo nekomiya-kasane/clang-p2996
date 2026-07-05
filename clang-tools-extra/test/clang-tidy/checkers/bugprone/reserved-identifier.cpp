@@ -1,6 +1,7 @@
 // RUN: %check_clang_tidy %s bugprone-reserved-identifier %t -- -- \
 // RUN:   -I%S/Inputs/reserved-identifier \
-// RUN:   -isystem %S/Inputs/reserved-identifier/system
+// RUN:   -isystem %S/Inputs/reserved-identifier/system \
+// RUN:   -std=gnu++26 -freflection-latest
 
 // no warnings expected without -header-filter=
 #include "user-header.h"
@@ -208,3 +209,34 @@ void function_() {}
 using alias_ = int;
 template <typename templateParam_>
 struct S_ {};
+
+struct SmallRangeForExpansionStatement {
+  int Data[3];
+
+  constexpr const int *begin() const { return Data; }
+  constexpr const int *end() const { return Data + 3; }
+};
+
+void expansion_statement_allows_internal_template_parameter() {
+  template for (constexpr auto N : {1, 2, 3}) {
+    (void)N;
+  }
+}
+
+void expansion_statement_allows_internal_iterable_range() {
+  template for (constexpr auto N : SmallRangeForExpansionStatement{{1, 2, 3}}) {
+    (void)N;
+  }
+}
+
+// CHECK-MESSAGES-NOT: declaration uses identifier '__N'
+// CHECK-MESSAGES-NOT: declaration uses identifier '__range'
+
+void expansion_statement_still_checks_user_identifier() {
+  template for (constexpr auto __n : {1, 2, 3}) {
+  // CHECK-MESSAGES: :[[@LINE-1]]:32: warning: declaration uses identifier '__n', which is a reserved identifier [bugprone-reserved-identifier]
+  // CHECK-FIXES: template for (constexpr auto _n : {1, 2, 3}) {
+    (void)__n;
+  // CHECK-FIXES: (void)_n;
+  }
+}

@@ -1086,6 +1086,12 @@ TEST(ConfigParseTest, ParsesConfiguration) {
   CHECK_PARSE("BreakAfterAttributes: Never", BreakAfterAttributes,
               FormatStyle::ABS_Never);
 
+  CHECK_PARSE("ReflectionAnnotationStyle: Compact", ReflectionAnnotationStyle,
+              FormatStyle::RAS_Compact);
+  CHECK_PARSE("ReflectionAnnotationStyle: Spaced", ReflectionAnnotationStyle,
+              FormatStyle::RAS_Spaced);
+  CHECK_PARSE("ReflectionAnnotationStyle: OwnLine", ReflectionAnnotationStyle,
+              FormatStyle::RAS_OwnLine);
   const auto DefaultLineEnding = FormatStyle::LE_DeriveLF;
   CHECK_PARSE("LineEnding: LF", LineEnding, FormatStyle::LE_LF);
   CHECK_PARSE("LineEnding: CRLF", LineEnding, FormatStyle::LE_CRLF);

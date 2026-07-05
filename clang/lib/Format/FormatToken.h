@@ -139,6 +139,7 @@ namespace format {
   TYPE(RecordLBrace)                                                           \
   TYPE(RecordRBrace)                                                           \
   TYPE(RegexLiteral)                                                           \
+  TYPE(ReflectionSplicerLSquare)                                               \
   TYPE(RequiresClause)                                                         \
   TYPE(RequiresClauseInARequiresExpression)                                    \
   TYPE(RequiresExpression)                                                     \

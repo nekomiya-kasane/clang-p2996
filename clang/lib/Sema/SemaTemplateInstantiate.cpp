@@ -3037,6 +3037,30 @@ TemplateInstantiator::TransformNestedRequirement(
       concepts::NestedRequirement(C, TransConstraint.get(), Satisfaction);
 }
 
+static bool DiagnoseUndeducedTemplateSpecializationType(Sema &S, QualType T, SourceLocation Loc,
+                                                        SourceRange Range) {
+  auto *DTST = dyn_cast_or_null<DeducedTemplateSpecializationType>(
+      T->getContainedDeducedType());
+  if (!DTST || !DTST->getDeducedType().isNull())
+    return false;
+
+  if (Range.getBegin().isInvalid())
+    Range = SourceRange(Loc);
+
+  TemplateName Name = DTST->getTemplateName();
+  S.Diag(Range.getBegin(), diag::err_auto_not_allowed)
+      << 3 << 15 << static_cast<int>(S.getTemplateNameKindForDiagnostics(Name))
+      << QualType(DTST, 0) << Range;
+  if (auto *TD = Name.getAsTemplateDecl())
+    S.NoteTemplateLocation(*TD);
+  return true;
+}
+
+static bool DiagnoseUndeducedTemplateSpecializationType(Sema &S, TypeSourceInfo *TSI, SourceLocation Loc) {
+  return DiagnoseUndeducedTemplateSpecializationType(
+      S, TSI->getType(), Loc, TSI->getTypeLoc().getSourceRange());
+}
+
 TypeSourceInfo *Sema::SubstType(TypeSourceInfo *T,
                                 const MultiLevelTemplateArgumentList &Args,
                                 SourceLocation Loc,
@@ -3051,8 +3075,13 @@ TypeSourceInfo *Sema::SubstType(TypeSourceInfo *T,
     return T;
 
   TemplateInstantiator Instantiator(*this, Args, Loc, Entity);
-  return AllowDeducedTST ? Instantiator.TransformTypeWithDeducedTST(T)
-                         : Instantiator.TransformType(T);
+  TypeSourceInfo *Result = AllowDeducedTST ? Instantiator.TransformTypeWithDeducedTST(T)
+                                           : Instantiator.TransformType(T);
+  if (!Result || AllowDeducedTST)
+    return Result;
+  if (DiagnoseUndeducedTemplateSpecializationType(*this, Result, Loc))
+    return nullptr;
+  return Result;
 }
 
 TypeSourceInfo *Sema::SubstType(TypeLoc TL,
@@ -3105,6 +3134,8 @@ QualType Sema::SubstType(QualType T,
   QualType QT = Instantiator.TransformType(T);
   if (IsIncompleteSubstitution && Instantiator.getIsIncomplete())
     *IsIncompleteSubstitution = true;
+  if (!QT.isNull() && DiagnoseUndeducedTemplateSpecializationType(*this, QT, Loc, SourceRange(Loc)))
+    return QualType();
   return QT;
 }
 

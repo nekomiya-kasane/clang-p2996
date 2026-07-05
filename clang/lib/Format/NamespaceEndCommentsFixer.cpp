@@ -170,11 +170,11 @@ bool validEndComment(const FormatToken *RBraceTok, StringRef NamespaceName,
   // Valid namespace end comments don't need to be edited.
   static const llvm::Regex NamespaceCommentPattern =
       llvm::Regex("^/[/*] *(end (of )?)? *(anonymous|unnamed)? *"
-                  "namespace( +([a-zA-Z0-9:_ ]+))?\\.? *(\\*/)?$",
+                  "namespace( +([a-zA-Z0-9:_$ ]+))?\\.? *(\\*/)?$",
                   llvm::Regex::IgnoreCase);
   static const llvm::Regex NamespaceMacroCommentPattern =
       llvm::Regex("^/[/*] *(end (of )?)? *(anonymous|unnamed)? *"
-                  "([a-zA-Z0-9_]+)\\(([a-zA-Z0-9:_]*|\".+\")\\)\\.? *(\\*/)?$",
+                  "([a-zA-Z0-9_]+)\\(([a-zA-Z0-9:_$]*|\".+\")\\)\\.? *(\\*/)?$",
                   llvm::Regex::IgnoreCase);
 
   SmallVector<StringRef, 8> Groups;
@@ -207,7 +207,7 @@ bool validEndComment(const FormatToken *RBraceTok, StringRef NamespaceName,
     return false;
 
   static const llvm::Regex CommentPattern = llvm::Regex(
-      "^/[/*] *( +([a-zA-Z0-9:_]+))?\\.? *(\\*/)?$", llvm::Regex::IgnoreCase);
+      "^/[/*] *( +([a-zA-Z0-9:_$]+))?\\.? *(\\*/)?$", llvm::Regex::IgnoreCase);
 
   // Pull out just the comment text.
   if (!CommentPattern.match(Comment->Next->TokenText, &Groups))

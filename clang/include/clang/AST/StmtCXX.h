@@ -553,7 +553,7 @@ protected:
                    SourceLocation ForLoc, SourceLocation LParenLoc,
                    SourceLocation ColonLoc, SourceLocation RParenLoc,
                    Expr *TParamRef);
-  CXXExpansionStmt(StmtClass SC, EmptyShell Empty) : Stmt(SC) { }
+  CXXExpansionStmt(StmtClass SC, EmptyShell Empty) : Stmt(SC), Expansions(nullptr) { }
 
   Stmt *const *getStmts() const { return SubStmts; }
   Stmt **getStmts() { return SubStmts; }

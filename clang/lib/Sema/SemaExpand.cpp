@@ -159,6 +159,7 @@ bool tryMakeCXXIterableExpansionSelectExpr(
 
     RangeVar = VarDecl::Create(S.Context, DC, Range->getBeginLoc(),
                                Range->getBeginLoc(), II, QT, TSI, SC_Auto);
+    RangeVar->setImplicit();
     if (ExpansionVar->isConstexpr())
       RangeVar->setConstexpr(true);
     else if (!LifetimeExtendTemps.empty()) {
@@ -624,6 +625,7 @@ Decl *Sema::ActOnExpansionStmtDeclaration(Scope *S, unsigned TParamDepth,
                                         TemplateKWLoc, TemplateKWLoc,
                                         TemplateDepth, /*Position=*/0, ParmName,
                                         ParmTy, false, ParmTI);
+  TParam->setImplicit();
 
   return BuildExpansionStmtDeclaration(TemplateKWLoc, TParam);
 }

@@ -2724,6 +2724,48 @@ the configuration (without a prefix: ``Auto``).
 
 
 
+.. _ReflectionAnnotationStyle:
+
+**ReflectionAnnotationStyle** (``ReflectionAnnotationStyleKind``) :versionbadge:`clang-format 21` :ref:`¶ <ReflectionAnnotationStyle>`
+  Controls spacing and line breaks for C++ reflection annotations written as
+  ``[[= constant-expression]]``. Ordinary C++ attributes continue to use
+  ``BreakAfterAttributes``.
+
+  Possible values:
+
+  * ``RAS_Compact`` (in configuration: ``Compact``)
+    Do not add spaces or line breaks specifically for reflection annotations.
+
+    .. code-block:: c++
+
+      struct[[= Anno::Interface]][[= Anno::Uuid{0}]] IFace;
+
+  * ``RAS_Spaced`` (in configuration: ``Spaced``)
+    Put reflection annotation groups on the same line separated by spaces.
+
+    .. code-block:: c++
+
+      struct [[= Anno::Interface]] [[= Anno::Uuid{0}]] IFace;
+
+      [[= Anno::Export{}]] void f();
+      [[= Anno::Order{0}]] int value;
+
+  * ``RAS_OwnLine`` (in configuration: ``OwnLine``)
+    Put each reflection annotation group on its own line.
+
+    .. code-block:: c++
+
+      struct
+      [[= Anno::Interface]]
+      [[= Anno::Uuid{0}]]
+      IFace;
+
+      [[= Anno::Export{}]]
+      void f();
+
+      [[= Anno::Order{0}]]
+      int value;
+
 .. _BreakAfterJavaFieldAnnotations:
 
 **BreakAfterJavaFieldAnnotations** (``Boolean``) :versionbadge:`clang-format 3.8` :ref:`¶ <BreakAfterJavaFieldAnnotations>`

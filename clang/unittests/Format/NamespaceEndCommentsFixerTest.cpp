@@ -79,6 +79,12 @@ TEST_F(NamespaceEndCommentsFixerTest, AddsEndComment) {
                                     "int i;\n"
                                     "int j;\n"
                                     "}"));
+  EXPECT_EQ("namespace $ {\n"
+            "int i;\n"
+            "} // namespace $",
+            fixNamespaceEndComments("namespace $ {\n"
+                                    "int i;\n"
+                                    "}"));
   EXPECT_EQ("#define M(x) x##x\n"
             "namespace M(x) {\n"
             "int i;\n"
@@ -678,6 +684,9 @@ TEST_F(NamespaceEndCommentsFixerTest, KeepsValidEndComment) {
   EXPECT_TRUE(isFormatted("namespace a::inline b {\n"
                           "int c;\n"
                           "}; // namespace a::inline b"));
+  EXPECT_TRUE(isFormatted("namespace $ {\n"
+                          "int i;\n"
+                          "} // namespace $"));
 }
 
 TEST_F(NamespaceEndCommentsFixerTest, KeepsValidMacroEndComment) {

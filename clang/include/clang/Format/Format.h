@@ -1702,6 +1702,33 @@ struct FormatStyle {
   /// \version 16
   AttributeBreakingStyle BreakAfterAttributes;
 
+  /// Different ways to format C++ reflection annotations written as
+  /// ``[[= constant-expression]]``.
+  enum ReflectionAnnotationStyleKind : int8_t {
+    /// Do not add spacing or line breaks specifically for reflection
+    /// annotations. This preserves the compact spelling accepted by the
+    /// reflection fork, e.g. ``struct[[= A]][[= B]] H``.
+    RAS_Compact,
+    /// Put reflection annotation groups on the same line separated by spaces,
+    /// e.g. ``struct [[= A]] [[= B]] H``.
+    RAS_Spaced,
+    /// Put each reflection annotation group on its own line, e.g.
+    ///
+    /// \code
+    ///   struct
+    ///   [[= A]]
+    ///   [[= B]]
+    ///   H;
+    /// \endcode
+    RAS_OwnLine,
+  };
+
+  /// Controls spacing and line breaks for C++ reflection annotations
+  /// ``[[= constant-expression]]``. Ordinary C++ attributes continue to use
+  /// ``BreakAfterAttributes``.
+  /// \version 21
+  ReflectionAnnotationStyleKind ReflectionAnnotationStyle;
+
   /// The function declaration return type breaking style to use.
   /// \version 19
   ReturnTypeBreakingStyle BreakAfterReturnType;
@@ -5351,6 +5378,7 @@ struct FormatStyle {
            BracedInitializerIndentWidth == R.BracedInitializerIndentWidth &&
            BreakAdjacentStringLiterals == R.BreakAdjacentStringLiterals &&
            BreakAfterAttributes == R.BreakAfterAttributes &&
+           ReflectionAnnotationStyle == R.ReflectionAnnotationStyle &&
            BreakAfterJavaFieldAnnotations == R.BreakAfterJavaFieldAnnotations &&
            BreakAfterReturnType == R.BreakAfterReturnType &&
            BreakArrays == R.BreakArrays &&

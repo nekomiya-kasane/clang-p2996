@@ -97,6 +97,11 @@ static bool isCppAttribute(bool IsCpp, const FormatToken &Tok) {
   // We assume nobody will name an ObjC variable 'using'.
   if (AttrTok->startsSequence(tok::kw_using, tok::identifier, tok::colon))
     return true;
+  if (AttrTok->is(tok::equal)) {
+    while (AttrTok && !AttrTok->startsSequence(tok::r_square, tok::r_square))
+      AttrTok = AttrTok->Next;
+    return AttrTok && AttrTok->startsSequence(tok::r_square, tok::r_square);
+  }
   if (AttrTok->isNot(tok::identifier))
     return false;
   while (AttrTok && !AttrTok->startsSequence(tok::r_square, tok::r_square)) {
@@ -113,6 +118,47 @@ static bool isCppAttribute(bool IsCpp, const FormatToken &Tok) {
     AttrTok = AttrTok->Next;
   }
   return AttrTok && AttrTok->startsSequence(tok::r_square, tok::r_square);
+}
+
+static bool isReflectionAnnotationAttributeStart(const FormatToken &Tok) {
+  return Tok.startsSequence(tok::l_square, tok::l_square, tok::equal);
+}
+
+static bool isReflectionAnnotationAttributeEnd(const FormatToken &Tok) {
+  if (Tok.isNot(tok::r_square) || !Tok.Previous ||
+      Tok.Previous->isNot(tok::r_square)) {
+    return false;
+  }
+  for (const FormatToken *T = Tok.Previous; T; T = T->Previous)
+    if (isReflectionAnnotationAttributeStart(*T))
+      return true;
+  return false;
+}
+
+static bool canBreakAfterReflectionAnnotationAttribute(const FormatToken &Tok) {
+  return !Tok.isOneOf(tok::semi, tok::comma, tok::equal, tok::l_brace,
+                      tok::r_brace, tok::r_paren, tok::r_square);
+}
+
+static bool followsReflectionAnnotationAttribute(const FormatToken &Tok) {
+  const FormatToken *Previous = Tok.getPreviousNonComment();
+  return Previous && isReflectionAnnotationAttributeEnd(*Previous) &&
+         canBreakAfterReflectionAnnotationAttribute(Tok);
+}
+
+static bool spaceAroundReflectionAnnotation(const FormatStyle &Style) {
+  return Style.ReflectionAnnotationStyle != FormatStyle::RAS_Compact;
+}
+
+static bool isReflectionOperatorCaret(const FormatToken &Tok) {
+  if (Tok.isNot(tok::caret))
+    return false;
+
+  if (Tok.Next && Tok.Next->is(tok::caret) && !Tok.Next->hasWhitespaceBefore())
+    return true;
+
+  return Tok.Previous && Tok.Previous->is(tok::caret) &&
+         !Tok.hasWhitespaceBefore();
 }
 
 /// A parser that gathers additional information about tokens.
@@ -696,9 +742,12 @@ private:
 
     bool InsideInlineASM = Line.startsWith(tok::kw_asm);
     bool IsCppStructuredBinding = Left->isCppStructuredBinding(IsCpp);
+    bool IsCppReflectionSplicer =
+        IsCpp && CurrentToken && CurrentToken->is(tok::colon);
     bool StartsObjCMethodExpr =
-        !IsCppStructuredBinding && !InsideInlineASM && !CppArrayTemplates &&
-        IsCpp && !IsCpp11AttributeSpecifier && !IsCSharpAttributeSpecifier &&
+        !IsCppStructuredBinding && !IsCppReflectionSplicer &&
+        !InsideInlineASM && !CppArrayTemplates && IsCpp &&
+        !IsCpp11AttributeSpecifier && !IsCSharpAttributeSpecifier &&
         Contexts.back().CanBeExpression && Left->isNot(TT_LambdaLSquare) &&
         !CurrentToken->isOneOf(tok::l_brace, tok::r_square) &&
         (!Parent ||
@@ -714,6 +763,8 @@ private:
     unsigned BindingIncrease = 1;
     if (IsCppStructuredBinding) {
       Left->setType(TT_StructuredBindingLSquare);
+    } else if (IsCppReflectionSplicer) {
+      Left->setType(TT_ReflectionSplicerLSquare);
     } else if (Left->is(TT_Unknown)) {
       if (StartsObjCMethodExpr) {
         Left->setType(TT_ObjCMethodExpr);
@@ -2433,7 +2484,8 @@ private:
     } else if (Current.isOneOf(tok::minus, tok::plus, tok::caret) ||
                (Style.isVerilog() && Current.is(tok::pipe))) {
       Current.setType(determinePlusMinusCaretUsage(Current));
-      if (Current.is(TT_UnaryOperator) && Current.is(tok::caret))
+      if (Current.is(TT_UnaryOperator) && Current.is(tok::caret) &&
+          !isReflectionOperatorCaret(Current))
         Contexts.back().CaretFound = true;
     } else if (Current.isOneOf(tok::minusminus, tok::plusplus)) {
       Current.setType(determineIncrementUsage(Current));
@@ -4119,6 +4171,13 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) const {
       }
     }
 
+    if (Style.ReflectionAnnotationStyle == FormatStyle::RAS_OwnLine &&
+        followsReflectionAnnotationAttribute(*Current)) {
+      Current->MustBreakBefore = true;
+      if (LineIsFunctionDeclaration)
+        Line.ReturnTypeWrapped = true;
+    }
+
     Current->CanBreakBefore =
         Current->MustBreakBefore || canBreakBefore(Line, *Current);
 
@@ -4301,7 +4360,7 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
     if (Right.is(TT_LambdaLSquare) && Left.is(tok::equal))
       return 35;
     if (!Right.isOneOf(TT_ObjCMethodExpr, TT_LambdaLSquare,
-                       TT_ArrayInitializerLSquare,
+                       TT_ArrayInitializerLSquare, TT_ReflectionSplicerLSquare,
                        TT_DesignatedInitializerLSquare, TT_AttributeSquare)) {
       return 500;
     }
@@ -4551,6 +4610,23 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
 
   const auto *BeforeLeft = Left.Previous;
 
+  if (isReflectionAnnotationAttributeStart(Right))
+    return spaceAroundReflectionAnnotation(Style);
+
+  if (Left.is(tok::colon) && Left.Previous &&
+      Left.Previous->is(TT_ReflectionSplicerLSquare)) {
+    return false;
+  }
+  if (Right.is(tok::colon) && Right.Next && Right.Next->is(tok::r_square) &&
+      Right.Next->MatchingParen &&
+      Right.Next->MatchingParen->is(TT_ReflectionSplicerLSquare)) {
+    return false;
+  }
+  if (Right.is(tok::r_square) && Right.MatchingParen &&
+      Right.MatchingParen->is(TT_ReflectionSplicerLSquare) &&
+      Left.is(tok::colon)) {
+    return false;
+  }
   // operator co_await(x)
   if (Right.is(tok::l_paren) && Left.is(tok::kw_co_await) && BeforeLeft &&
       BeforeLeft->is(tok::kw_operator)) {
@@ -4773,21 +4849,27 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
     return (Left.is(TT_ArrayInitializerLSquare) && Right.isNot(tok::r_square) &&
             SpaceRequiredForArrayInitializerLSquare(Left, Style)) ||
            (Left.isOneOf(TT_ArraySubscriptLSquare, TT_StructuredBindingLSquare,
-                         TT_LambdaLSquare) &&
+                         TT_LambdaLSquare, TT_ReflectionSplicerLSquare) &&
             Style.SpacesInSquareBrackets && Right.isNot(tok::r_square));
   }
+  if (Left.is(TT_ReflectionSplicerLSquare) && Right.is(tok::colon))
+    return false;
   if (Right.is(tok::r_square)) {
     return Right.MatchingParen &&
            ((Right.MatchingParen->is(TT_ArrayInitializerLSquare) &&
              SpaceRequiredForArrayInitializerLSquare(*Right.MatchingParen,
                                                      Style)) ||
             (Style.SpacesInSquareBrackets &&
-             Right.MatchingParen->isOneOf(TT_ArraySubscriptLSquare,
-                                          TT_StructuredBindingLSquare,
-                                          TT_LambdaLSquare)));
+             Right.MatchingParen->isOneOf(
+                 TT_ArraySubscriptLSquare, TT_StructuredBindingLSquare,
+                 TT_LambdaLSquare, TT_ReflectionSplicerLSquare)));
   }
+  if (Right.is(TT_ReflectionSplicerLSquare))
+    return !Left.isOneOf(tok::period, tok::arrow, tok::arrowstar);
+
   if (Right.is(tok::l_square) &&
       !Right.isOneOf(TT_ObjCMethodExpr, TT_LambdaLSquare,
+                     TT_ReflectionSplicerLSquare,
                      TT_DesignatedInitializerLSquare,
                      TT_StructuredBindingLSquare, TT_AttributeSquare) &&
       !Left.isOneOf(tok::numeric_constant, TT_DictLiteral) &&
@@ -4981,6 +5063,23 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
 
   const auto *BeforeLeft = Left.Previous;
 
+  if (isReflectionAnnotationAttributeStart(Right))
+    return spaceAroundReflectionAnnotation(Style);
+
+  if (Left.is(tok::colon) && Left.Previous &&
+      Left.Previous->is(TT_ReflectionSplicerLSquare)) {
+    return false;
+  }
+  if (Right.is(tok::colon) && Right.Next && Right.Next->is(tok::r_square) &&
+      Right.Next->MatchingParen &&
+      Right.Next->MatchingParen->is(TT_ReflectionSplicerLSquare)) {
+    return false;
+  }
+  if (Right.is(tok::r_square) && Right.MatchingParen &&
+      Right.MatchingParen->is(TT_ReflectionSplicerLSquare) &&
+      Left.is(tok::colon)) {
+    return false;
+  }
   if (IsCpp) {
     if (Left.is(TT_OverloadedOperator) &&
         Right.isOneOf(TT_TemplateOpener, TT_TemplateCloser)) {
@@ -5429,6 +5528,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
            Style.BitFieldColonSpacing == FormatStyle::BFCS_After;
   }
   if (Right.is(tok::colon)) {
+    if (Left.isOneOf(TT_ReflectionSplicerLSquare, tok::colon))
+      return false;
     if (Right.is(TT_CaseLabelColon))
       return Style.SpaceBeforeCaseColon;
     if (Right.is(TT_GotoLabelColon))
@@ -5616,6 +5717,13 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
 
   const auto *BeforeLeft = Left.Previous;
   const auto *AfterRight = Right.Next;
+
+  if (Style.ReflectionAnnotationStyle == FormatStyle::RAS_OwnLine &&
+      (isReflectionAnnotationAttributeStart(Right) ||
+       (isReflectionAnnotationAttributeEnd(Left) &&
+        canBreakAfterReflectionAnnotationAttribute(Right)))) {
+    return true;
+  }
 
   if (Style.isCSharp()) {
     if (Left.is(TT_FatArrow) && Right.is(tok::l_brace) &&
@@ -5809,6 +5917,36 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
     return true;
   if (Left.IsUnterminatedLiteral)
     return true;
+
+  auto IsRequiresExpressionLBrace = [](const FormatToken &LBrace) {
+    if (LBrace.is(TT_RequiresExpressionLBrace))
+      return true;
+    const FormatToken *BeforeLBrace = LBrace.getPreviousNonComment();
+    if (BeforeLBrace && BeforeLBrace->is(tok::r_paren) &&
+        BeforeLBrace->MatchingParen) {
+      BeforeLBrace = BeforeLBrace->MatchingParen->getPreviousNonComment();
+    }
+    return BeforeLBrace && BeforeLBrace->is(tok::kw_requires);
+  };
+  auto ShouldKeepRequiresBodyMultiline = [&Line](const FormatToken &RBrace) {
+    const FormatToken *AfterRBrace = RBrace.getNextNonComment();
+    const FormatToken *AfterOperator =
+        AfterRBrace ? AfterRBrace->getNextNonComment() : nullptr;
+    return Line.startsWith(tok::kw_return) ||
+           (AfterRBrace && AfterRBrace->is(TT_BinaryOperator) &&
+            AfterOperator && AfterOperator->is(TT_LambdaLSquare));
+  };
+  if (Right.is(tok::r_brace) && Right.MatchingParen &&
+      Right.MatchingParen->is(tok::l_brace) &&
+      IsRequiresExpressionLBrace(*Right.MatchingParen) &&
+      ShouldKeepRequiresBodyMultiline(Right)) {
+    return true;
+  }
+  if (Left.is(tok::l_brace) && Left.MatchingParen &&
+      IsRequiresExpressionLBrace(Left) && Right.isNot(tok::r_brace) &&
+      ShouldKeepRequiresBodyMultiline(*Left.MatchingParen)) {
+    return true;
+  }
 
   if (BeforeLeft && BeforeLeft->is(tok::lessless) &&
       Left.is(tok::string_literal) && Right.is(tok::lessless) && AfterRight &&
@@ -6383,6 +6521,9 @@ bool TokenAnnotator::canBreakBefore(const AnnotatedLine &Line,
 
   if (Right.isAttribute())
     return true;
+
+  if (Right.is(TT_ReflectionSplicerLSquare))
+    return !Left.isOneOf(tok::period, tok::arrow, tok::arrowstar);
 
   if (Right.is(tok::l_square) && Right.is(TT_AttributeSquare))
     return Left.isNot(TT_AttributeSquare);
